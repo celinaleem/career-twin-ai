@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from career_twin.ingest import extract
+from career_twin.compare import compare_resume
 from career_twin.storage import Store
 from career_twin.retrieval import search
 from career_twin.services import validated_claims, experience_answer, judge_requirement, coverage, recommend_jobs
@@ -60,5 +61,26 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError): extract('empty.txt',b' ')
         with self.assertRaises(ValueError): extract('bad.exe',b'data')
         with self.assertRaises(ValueError): extract('bad.txt',b'\xff')
+
+    def test_resume_comparison_does_not_turn_plans_into_experience(self):
+        requirements = [
+            {'text': 'Python과 FAISS 검색 구현', 'category': '필수'},
+            {'text': 'Airflow 운영 경험', 'category': '우대'},
+            {'text': 'Docker 배포 경험', 'category': '우대'},
+        ]
+        chunks = [{'id': 'a', 'kind': 'personal', 'name': 'resume.md',
+                   'section': '프로젝트', 'text': 'Python과 FAISS로 검색을 구현했다.\n'
+                   'Airflow 운영은 아직 수행하지 않았다. 학습할 예정이다.'}]
+        report = compare_resume(requirements, chunks)
+        self.assertEqual(report['rows'][0]['signal'], '관련 표현 발견')
+        self.assertEqual(report['rows'][1]['signal'], '경험 확인 필요')
+        self.assertEqual(report['rows'][2]['signal'], '관련 표현 미발견')
+        self.assertEqual(report['missing_keywords'], ['Docker'])
+        self.assertIn('Python과 FAISS로 검색을 구현했다.', report['rows'][0]['resume_quote'])
+        unrelated = compare_resume([{'text': 'Docker 운영 경험', 'category': '필수'}],
+                                   [{**chunks[0], 'text': 'Kubernetes 운영 경험이 있다.'}])
+        self.assertEqual(unrelated['rows'][0]['signal'], '관련 표현 미발견')
+        with self.assertRaises(ValueError):
+            compare_resume(requirements, [{**chunks[0], 'kind': 'paper'}])
 
 if __name__ == '__main__': unittest.main()

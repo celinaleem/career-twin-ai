@@ -8,8 +8,9 @@ from pathlib import Path
 import streamlit as st
 
 from career_twin.config import SETTINGS
+from career_twin.compare import compare_resume
 from career_twin.dataset import load_samples
-from career_twin.ingest import extract, render_page
+from career_twin.ingest import extract, render_page, split_text
 from career_twin.job_sources import JobSourceError, fetch_job_page, search_jobkorea_jobs, search_saramin_jobs
 from career_twin.local_ai import Ollama
 from career_twin.retrieval import search, source_label
@@ -17,13 +18,41 @@ from career_twin.services import (coverage, experience_answer, explain_paper,
                                  extract_requirements, judge_requirement, recommend_jobs)
 from career_twin.storage import Store
 
-st.set_page_config(page_title="Career Twin AI", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="Career Twin AI | 커리어 인사이트", page_icon="✦", layout="wide")
 st.markdown("""<style>
-.stApp {background:#eff8ff;color:#1f2937;}
-.block-container {max-width:1180px;padding-top:2rem;}
-h1,h2,h3 {color:#173b66;}
-div.stButton > button[kind="primary"] {background:#173b66;border:0;border-radius:12px;}
-[data-testid="stMetric"] {background:white;border-radius:16px;padding:16px;}
+.stApp {background:#f7f8fa;color:#172331;}
+.block-container {max-width:1240px;padding-top:2.1rem;padding-bottom:4rem;}
+html, body, [class*="css"] {font-family: Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;}
+h1, h2, h3 {color:#172331;letter-spacing:-.035em;}
+h2 {font-size:1.5rem;} h3 {font-size:1.14rem;}
+[data-testid="stSidebar"] {background:#fff;border-right:1px solid #e5e9ee;}
+[data-testid="stSidebar"] h2,[data-testid="stSidebar"] h3 {color:#21324a;}
+button[kind^="primary"] {
+  background:#174f74 !important;border:1px solid #174f74 !important;border-radius:10px !important;
+  color:#fff !important;font-weight:650;
+  box-shadow:0 4px 12px rgba(23,79,116,.14);}
+button[kind^="primary"]:hover {background:#103e5e !important;border-color:#103e5e !important;color:#fff !important;}
+div.stButton > button, div.stDownloadButton > button, div.stLinkButton > a {
+  border-radius:10px;font-weight:600;}
+[data-testid="stTabs"] [role="tablist"] {gap:.45rem;border-bottom:1px solid #dce3e9;overflow-x:auto;}
+[data-testid="stTabs"] [role="tab"] {padding:.75rem 1rem;color:#607184;font-weight:650;border-radius:9px 9px 0 0;white-space:nowrap;}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {color:#174f74;background:#eaf3f7;}
+[role="tab"] .react-aria-SelectionIndicator {background:#174f74 !important;}
+[data-testid="stTextArea"] textarea, [data-testid="stTextInput"] input {background:#fff;border-color:#d6e0e8;}
+label[data-testid="stRadioOption"][data-selected="true"] > div > div:first-child {
+  background:#174f74 !important;border-color:#174f74 !important;}
+[data-testid="stVerticalBlockBorderWrapper"] {border-color:#e2e8ee;border-radius:14px;background:#fff;}
+[data-testid="stMetric"] {background:#fff;border:1px solid #e3e9ee;border-radius:14px;padding:16px;}
+.ct-summary {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:1rem 0 1.5rem;}
+.ct-stat {background:#fff;border:1px solid #e2e8ee;border-radius:14px;padding:16px;}
+.ct-stat-label {display:block;color:#627487;font-size:.82rem;line-height:1.4;}
+.ct-stat-value {display:block;color:#173e57;font-size:1.85rem;font-weight:750;margin-top:.35rem;}
+.ct-hero {background:linear-gradient(115deg,#183c58,#1d6477 68%,#287c7a);color:#fff;
+  border-radius:22px;padding:2rem 2.3rem;margin-bottom:1.4rem;box-shadow:0 12px 30px rgba(16,53,75,.14);}
+.ct-eyebrow {font-size:.75rem;letter-spacing:.16em;font-weight:750;color:#b9e3df;margin-bottom:.6rem;}
+.ct-hero h1 {color:#fff;font-size:2.5rem;line-height:1.22;margin:0 0 .55rem 0;}
+.ct-hero p {color:#d7ebed;margin:0;line-height:1.65;}
+.ct-section-note {color:#637384;font-size:.9rem;margin-top:-.35rem;margin-bottom:1.1rem;}
 </style>""", unsafe_allow_html=True)
 
 
@@ -50,7 +79,7 @@ store = Store(SETTINGS.data_dir / "private")
 
 
 def clear_results():
-    for key in ("experience_result", "match_results", "paper_hits", "paper_result", "job_hits", "live_job_hits"):
+    for key in ("experience_result", "match_results", "compare_result", "paper_hits", "paper_result", "job_hits", "live_job_hits"):
         st.session_state.pop(key, None)
 
 
@@ -80,11 +109,13 @@ with st.sidebar:
 
 ai = Ollama() if mode == "Ollama AI 답변" else None
 retrieval_ai = Ollama() if semantic else None
-st.title("🌱 Career Twin AI")
-st.write("내 경험을 근거로 직무를 탐색하고, 논문으로 면접을 준비하세요.")
-st.caption("실제 공고 추천은 공식 API를 사용합니다. 합격자 사례·합격 확률은 제공하지 않습니다.")
-documents_tab, jobs_tab, experience_tab, matching_tab, papers_tab = st.tabs([
-    "내 자료", "공고 탐색", "경험 질문", "JD 근거 매칭", "논문 · 면접 준비"])
+st.markdown("""<div class="ct-hero"><div class="ct-eyebrow">CAREER INTELLIGENCE WORKSPACE</div>
+<h1>경험을 근거로, 다음 커리어를 설계하세요.</h1>
+<p>내 문서와 채용공고를 연결하고, 이력서의 표현을 점검하며, 면접 준비까지 이어갑니다.</p></div>""",
+    unsafe_allow_html=True)
+st.caption("개인 자료는 현재 앱 서버에 저장됩니다 · 검색 점수는 합격 가능성이 아닙니다")
+documents_tab, jobs_tab, compare_tab, experience_tab, matching_tab, papers_tab = st.tabs([
+    "01  내 자료", "02  공고 탐색", "03  이력서 비교", "04  경험 질문", "05  JD 근거 매칭", "06  논문 · 면접"])
 
 with documents_tab:
     st.subheader("개인 문서와 논문 등록")
@@ -180,9 +211,10 @@ with jobs_tab:
                 st.link_button("원문 공고 열기", hit["url"])
             if st.button("이 공고의 요구사항 분석", key="choose_live_" + hit["id"]):
                 st.session_state.jd_input = hit["text"] + ("\n\n원문 URL: " + hit["url"] if hit["url"] else "")
+                st.session_state.compare_jd_input = st.session_state.jd_input
                 st.session_state.pop("requirements", None)
                 st.session_state.pop("match_results", None)
-                st.success("JD 근거 매칭 탭으로 이동하세요.")
+                st.success("이력서 비교 또는 JD 근거 매칭 탭에서 이어서 분석하세요.")
 
     with st.expander("데모용 합성 공고 탐색"):
         samples = load_samples()
@@ -209,9 +241,114 @@ with jobs_tab:
                 st.caption(f"합성 공고 · BM25 검색 순위용 점수 {hit['score']:.3f} (적합도·확률 아님)")
                 if st.button("이 합성 공고의 요구사항 분석", key="choose_" + hit["id"]):
                     st.session_state.jd_input = hit["text"]
+                    st.session_state.compare_jd_input = hit["text"]
                     st.session_state.pop("requirements", None)
                     st.session_state.pop("match_results", None)
-                    st.success("JD 근거 매칭 탭으로 이동하세요.")
+                    st.success("이력서 비교 또는 JD 근거 매칭 탭에서 이어서 분석하세요.")
+
+with compare_tab:
+    st.subheader("이력서 · 공고 비교")
+    st.markdown('<p class="ct-section-note">공고가 요구하는 표현과 이력서의 실제 문장을 나란히 확인하고 수정할 부분을 찾습니다.</p>',
+                unsafe_allow_html=True)
+    input_method = st.radio("이력서 입력 방식", ["저장된 문서 선택", "텍스트 붙여넣기"], horizontal=True)
+    personal_docs = store.documents("personal")
+    selected_doc = None
+    pasted_resume = ""
+    if input_method == "저장된 문서 선택":
+        if personal_docs:
+            selected_doc = st.selectbox("비교할 이력서 또는 경험 문서", personal_docs,
+                                        format_func=lambda doc: doc["name"])
+        else:
+            st.info("내 자료 탭에서 이력서 PDF·Markdown·TXT를 먼저 등록하거나 텍스트 붙여넣기를 선택하세요.")
+    if "compare_jd_input" not in st.session_state:
+        st.session_state.compare_jd_input = st.session_state.get("jd_input", "")
+    with st.form("compare_form"):
+        if input_method == "텍스트 붙여넣기":
+            pasted_resume = st.text_area("이력서 본문", height=190,
+                                         placeholder="실제로 수행한 프로젝트와 역할을 붙여넣으세요.")
+        comparison_jd = st.text_area("채용공고 본문", height=190, key="compare_jd_input",
+                                     placeholder="주요 업무·필수·우대 사항을 줄바꿈으로 구분하면 더 잘 분석됩니다.")
+        compare_clicked = st.form_submit_button("이력서와 공고 비교", type="primary")
+    if compare_clicked:
+        if not comparison_jd.strip():
+            st.warning("채용공고 본문을 입력하세요.")
+        elif input_method == "저장된 문서 선택" and selected_doc is None:
+            st.warning("비교할 문서를 선택하세요.")
+        elif input_method == "텍스트 붙여넣기" and not pasted_resume.strip():
+            st.warning("이력서 본문을 입력하세요.")
+        elif len(pasted_resume) > 20000:
+            st.warning("붙여넣는 이력서는 20,000자 이하로 입력하세요.")
+        else:
+            try:
+                if selected_doc is not None and input_method == "저장된 문서 선택":
+                    resume_chunks = [chunk for chunk in store.chunks("personal")
+                                     if chunk["document_id"] == selected_doc["id"]]
+                    resume_name = selected_doc["name"]
+                else:
+                    resume_chunks = [{**chunk, "id": f"pasted:{i}", "kind": "personal",
+                                      "name": "붙여넣은 이력서"}
+                                     for i, chunk in enumerate(split_text(pasted_resume, section="본문"))]
+                    resume_name = "붙여넣은 이력서"
+                requirements = extract_requirements(comparison_jd, ai)
+                if not requirements:
+                    st.warning("공고에서 요구사항을 찾지 못했습니다. 주요 업무·필수·우대 사항을 줄별로 입력해 보세요.")
+                else:
+                    report = compare_resume(requirements, resume_chunks)
+                    st.session_state.compare_result = {**report, "resume_name": resume_name,
+                                                       "jd": comparison_jd,
+                                                       "input_method": input_method,
+                                                       "resume_key": selected_doc["id"] if selected_doc is not None
+                                                       and input_method == "저장된 문서 선택" else
+                                                       hashlib.sha256(pasted_resume.encode()).hexdigest()}
+            except Exception as exc:
+                st.error(str(exc))
+    report = st.session_state.get("compare_result")
+    current_resume_key = (selected_doc["id"] if selected_doc is not None and
+                          input_method == "저장된 문서 선택" else
+                          hashlib.sha256(pasted_resume.encode()).hexdigest())
+    if report and (report["jd"] != comparison_jd or report["input_method"] != input_method or
+                   report["resume_key"] != current_resume_key):
+        st.info("입력 내용이 변경됐습니다. 비교 버튼을 눌러 결과를 새로 확인하세요.")
+        report = None
+    if report:
+        st.divider()
+        st.subheader("비교 결과")
+        st.caption(f"비교 문서: {report['resume_name']} · 관련 문장은 검색 후보이며 수행 경험 판정이 아닙니다.")
+        rows = report["rows"]
+        found = sum(row["signal"] == "관련 표현 발견" for row in rows)
+        unproven = sum(row["signal"] == "경험 확인 필요" for row in rows)
+        st.markdown(f"""<div class="ct-summary">
+          <div class="ct-stat"><span class="ct-stat-label">공고 요구사항</span><span class="ct-stat-value">{len(rows)}</span></div>
+          <div class="ct-stat"><span class="ct-stat-label">관련 문장 후보</span><span class="ct-stat-value">{found}</span></div>
+          <div class="ct-stat"><span class="ct-stat-label">경험 확인 필요</span><span class="ct-stat-value">{unproven}</span></div>
+        </div>""", unsafe_allow_html=True)
+        if report["missing_keywords"]:
+            st.markdown("**이력서에서 찾지 못한 영문 기술 키워드**")
+            st.write(" · ".join(report["missing_keywords"]))
+            st.caption("단어의 부재만 확인한 결과입니다. 실제로 사용한 기술일 때만 이력서에 반영하세요.")
+        else:
+            st.caption("공고의 영문 기술 키워드는 이력서에 모두 등장하거나 추출되지 않았습니다.")
+        for index, row in enumerate(rows, 1):
+            with st.container(border=True):
+                left, right = st.columns([1, 1], gap="large")
+                with left:
+                    st.caption(f"{index:02d} · 공고 요구사항 · {row['category']}")
+                    st.write(row["requirement"])
+                with right:
+                    st.caption(f"이력서 문장 · {row['signal']}")
+                    st.write(row["resume_quote"] or "관련 표현을 찾지 못했습니다.")
+                    if row["source"]:
+                        st.caption(row["source"])
+                st.markdown("**수정 제안**")
+                st.write(row["suggestion"])
+        export_lines = ["# 이력서·공고 비교", f"이력서: {report['resume_name']}",
+                        "", "빠진 영문 기술 키워드: " + (", ".join(report["missing_keywords"]) or "없음"), ""]
+        for row in rows:
+            export_lines += [f"## {row['requirement']}", f"- 구분: {row['category']}",
+                             f"- 확인: {row['signal']}", f"- 이력서 문장: {row['resume_quote'] or '찾지 못함'}",
+                             f"- 출처: {row['source'] or '없음'}", f"- 수정 제안: {row['suggestion']}", ""]
+        st.download_button("비교 결과 Markdown 저장", "\n".join(export_lines),
+                           "resume_jd_comparison.md", "text/markdown")
 
 with experience_tab:
     st.subheader("내 경험에 질문하기")
