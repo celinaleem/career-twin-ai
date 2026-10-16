@@ -80,6 +80,8 @@ class CoreTests(unittest.TestCase):
         unrelated = compare_resume([{'text': 'Docker 운영 경험', 'category': '필수'}],
                                    [{**chunks[0], 'text': 'Kubernetes 운영 경험이 있다.'}])
         self.assertEqual(unrelated['rows'][0]['signal'], '관련 표현 미발견')
+        self.assertEqual(compare_resume([{'text': '원문 URL: https://example.com/job',
+                                          'category': '업무'}], chunks)['rows'], [])
         with self.assertRaises(ValueError):
             compare_resume(requirements, [{**chunks[0], 'kind': 'paper'}])
 

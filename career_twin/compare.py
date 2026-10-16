@@ -5,7 +5,7 @@ from .retrieval import search, source_label
 
 
 _COMMON_ENGLISH = {"and", "the", "for", "with", "from", "job", "role", "team", "year", "years"}
-_UNPROVEN = re.compile(r"(?:하지\s*않|한\s*적\s*없|경험\s*없|예정|계획|관심|학습\s*중|공부\s*중|미경험)")
+_UNPROVEN = re.compile(r"(?:하지\s*않|한\s*적\s*없|경험\s*없|예정|계획|학습\s*중|공부\s*중|미경험)")
 
 
 def english_keywords(text):
@@ -35,7 +35,7 @@ def compare_resume(requirements, chunks):
     rows = []
     for requirement in requirements:
         query = str(requirement.get("text") or "").strip()
-        if not query:
+        if not query or re.match(r"^(?:원문\s*URL\s*:|https?://)", query, re.IGNORECASE):
             continue
         keywords = english_keywords(query)
         hits = search(query, sentences, k=5)
